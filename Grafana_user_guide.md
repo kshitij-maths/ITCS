@@ -206,3 +206,15 @@ $HOME/Monitoring/start_monitoring.sh
 echo "✅ Monitoring Online!"
 echo "👉 Access at: http://$(hostname -s).maths.sissa.it:3000"
 ```
+
+### **Auto-start on Reboot (optional but recommnded)**
+
+To ensure the monitoring starts automatically if you restart your workstation:
+
+Open your terminal and type: `crontab -e`
+
+Scroll to the bottom of the file.
+
+Paste the following line: `@reboot $HOME/Monitoring/start_monitoring.sh`
+
+Save and exit.
