@@ -7,10 +7,11 @@
 1. [Introduction](#1-introduction)
 2. [How to Access](#2-how-to-access)
 3. [Dashboard Layout](#3-dashboard-layout)
+4. [How to Deploy on Your Workstation](#4-how-to-deploy-on-your-workstation)
 
 ## 1. Introduction
 
-We have deployed a real-time monitoring system to track the health and availability of our shared compute nodes (**Telemaco** and **Penelope**). Before launching heavy simulations or training jobs, please check this dashboard to ensure the hardware is free and healthy.
+
 
 ## 2. How to Access
 
@@ -53,7 +54,7 @@ The dashboard is organized into three distinct rows to help you quickly assess s
 - **Time-Series Graphs:** Scroll down to view the performance history over the last selected time period.
 - **Usage:** To identify when a crash occurred, if any (e.g., a sudden drop in GPU memory usage), or to verify if the node was busy recently.
 
-### 4. How to Deploy on Your Workstation
+## 4. How to Deploy on Your Workstation
 
 If you want to deploy this monitoring service on your workstation (so it is accessible via `http://<your-hostname>.maths.sissa.it:3000`), follow these steps.
 
@@ -62,26 +63,30 @@ If you want to deploy this monitoring service on your workstation (so it is acce
 - Linux Workstation (Ubuntu/CentOS).
 - NVIDIA Drivers installed.
 
-**Section Overview:**
+**Overview:**
 
-1. Download the official binaries for **Prometheus** (Database), **Grafana** (Dashboard), and **Exporters** (Hardware Probes) into a `~/Monitoring` folder.
+1. Download the official binaries for **Prometheus**, **Grafana**, and **Exporters**.
 2. Configure Prometheus to listen to your local CPU and GPU.
-3. Configure Grafana to allow **public read-only access** (so you don't need to log in).
-4. Start all services in the background.
+3. Configure Grafana to allow **public read-only access**.
+4. Start all services in the background using a startup script.
 5. Import the dashboard.
 
-### **Download & Extract**
 
-Copy and paste this block to create the directory and download the required software.
+
+### **Phase 1: Download & Extract**
+
+Copy and paste this block. It uses absolute paths to ensure files are placed correctly.
 
 ```bash
-mkdir -p ~/Monitoring && cd ~/Monitoring
+# Create directory
+mkdir -p $HOME/Monitoring
+cd $HOME/Monitoring
 
-# Download
-wget -q -nc [https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz](https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz)
-wget -q -nc [https://dl.grafana.com/oss/release/grafana-10.2.0.linux-amd64.tar.gz](https://dl.grafana.com/oss/release/grafana-10.2.0.linux-amd64.tar.gz)
-wget -q -nc [https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz](https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz)
-wget -q -nc [https://github.com/utkuozdemir/nvidia_gpu_exporter/releases/download/v0.5.0/nvidia_gpu_exporter_0.5.0_linux_x86_64.tar.gz](https://github.com/utkuozdemir/nvidia_gpu_exporter/releases/download/v0.5.0/nvidia_gpu_exporter_0.5.0_linux_x86_64.tar.gz)
+# Download Components (Plain text URLs)
+wget -q -nc https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz
+wget -q -nc https://dl.grafana.com/oss/release/grafana-10.2.0.linux-amd64.tar.gz
+wget -q -nc https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+wget -q -nc https://github.com/utkuozdemir/nvidia_gpu_exporter/releases/download/v0.5.0/nvidia_gpu_exporter_0.5.0_linux_x86_64.tar.gz
 
 # Extract
 tar -xzf prometheus-2.45.0.linux-amd64.tar.gz
@@ -92,49 +97,85 @@ tar -xzf nvidia_gpu_exporter_0.5.0_linux_x86_64.tar.gz
 
 ### **Configuration**
 
-Copy and paste this block to configure Prometheus to listen to your hardware and Grafana to allow access without a password.
+This block includes a step to automatically connect Grafana to your hardware database.
 
 ```bash
-cd ~/Monitoring
+cd $HOME/Monitoring
 
-# Configure Prometheus (Database)
-cat > prometheus-2.45.0.linux-amd64/prometheus.yml <<EOF
+# 1. Configure Prometheus (The Database)
+cat > $HOME/Monitoring/prometheus-2.45.0.linux-amd64/prometheus.yml <<EOF
 global:
   scrape_interval: 5s
 scrape_configs:
   - job_name: 'local_workstation'
     static_configs:
-      - targets: ['localhost:9100', 'localhost:9835']
+      - targets: ['localhost:9101', 'localhost:9836']
 EOF
 
-# Configure Grafana (Dashboard) to allow Anonymous Viewers
-CONF="./grafana-10.2.0/conf/defaults.ini"
+# 2. Configure Grafana (The Dashboard)
+CONF="$HOME/Monitoring/grafana-10.2.0/conf/defaults.ini"
+# Allow public access & ensure port 3000
+sed -i 's/^;http_port =.*/http_port = 3000/' $CONF
 sed -i 's/^;http_addr =.*/http_addr = 0.0.0.0/' $CONF
 sed -i '/^\[auth.anonymous\]/,/^\[/ s/^;enabled = false/enabled = true/' $CONF
 sed -i '/^\[auth.anonymous\]/,/^\[/ s/^enabled = false/enabled = true/' $CONF
 sed -i '/^\[auth.anonymous\]/,/^\[/ s/^;org_role = .*/org_role = Viewer/' $CONF
+
+# 3. Auto-Connect Grafana to Prometheus
+mkdir -p $HOME/Monitoring/grafana-10.2.0/conf/provisioning/datasources
+cat > $HOME/Monitoring/grafana-10.2.0/conf/provisioning/datasources/prometheus.yml <<EOF
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9091
+    isDefault: true
+EOF
 ```
 
 ### **Launch Services**
 
-Run this block to start the background processes.
+This block creates a helper script `start_monitoring.sh` so you can easily restart the services later.
 
 ```bash
-cd ~/Monitoring
+# Create the startup script
+cat > $HOME/Monitoring/start_monitoring.sh << 'EOF'
+#!/bin/bash
 
-# Start Exporters and Services
-nohup ./node_exporter-1.7.0.linux-amd64/node_exporter --web.listen-address=":9100" > node.log 2>&1 &
-nohup ./nvidia_gpu_exporter_0.5.0_linux_x86_64/nvidia_gpu_exporter --web.listen-address=":9835" > gpu.log 2>&1 &
-cd prometheus-2.45.0.linux-amd64 && nohup ./prometheus > ../prometheus.log 2>&1 &
-cd ../grafana-10.2.0 && nohup ./bin/grafana-server > ../grafana.log 2>&1 &
+# Define Paths
+DIR="$HOME/Monitoring"
+cd "$DIR"
 
-echo "✅ Monitoring Online! Access at: http://$(hostname).maths.sissa.it:3000"
+# 1. Start Node Exporter (Port 9101)
+nohup "$DIR/node_exporter-1.7.0.linux-amd64/node_exporter" --web.listen-address=":9101" > node.log 2>&1 &
+
+# 2. Start GPU Exporter (Port 9836)
+if [ -f "$DIR/nvidia_gpu_exporter" ]; then
+    chmod +x "$DIR/nvidia_gpu_exporter"
+    nohup "$DIR/nvidia_gpu_exporter" --web.listen-address=":9836" > gpu.log 2>&1 &
+fi
+
+# 3. Start Prometheus (Port 9091)
+cd "$DIR/prometheus-2.45.0.linux-amd64" 
+nohup ./prometheus --config.file=prometheus.yml --web.listen-address="0.0.0.0:9091" > ../prometheus.log 2>&1 &
+
+# 4. Start Grafana (Port 3000)
+cd "$DIR/grafana-10.2.0" 
+nohup ./bin/grafana-server > ../grafana.log 2>&1 &
+EOF
+
+# Make the script executable and run it
+chmod +x $HOME/Monitoring/start_monitoring.sh
+$HOME/Monitoring/start_monitoring.sh
+
+echo "✅ Monitoring Online!"
+echo "👉 Access at: http://$(hostname -s).maths.sissa.it:3000"
 ```
 
 ### **Import the Dashboard**
 
 1. Open the link generated by the script.
-2. Login once with `admin` / `admin`.
+2. Login once with `admin` / `admin`. After this loging, you can (and should) create an account with desired username and password.
 3. Go to **Dashboards** $\rightarrow$ **New** $\rightarrow$ **Import**.
 4. Upload the `Hardware Resources.json` file (attached below).
-  
